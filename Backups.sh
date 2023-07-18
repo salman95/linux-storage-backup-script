@@ -8,11 +8,11 @@ source_dirs=(
   "/media/Vids"
 )
 
-#Removes previously archived files.
-rm /media/Backup_Drive/*.tar.gz
-
 #Enter the drive location where you want to place the backups.
 backup_dir="/media/Backup_Drive"
+
+#Removes previously archived files.
+rm "${backup_dir}"/*.tar.gz
 
 #timestamp=$(date +%Y%m%d%H%M%S)
 
