@@ -1,37 +1,36 @@
 #!/bin/bash
-set -euo pipefail
+set -uo pipefail
 
-# --- Configuration ---
-source_dirs=(
-    "/mnt/Tech"
-    "/mnt/Personal"
-    "/mnt/Vids"
-)
+# --- Web-friendly backup script ---
+# This version accepts source directories as arguments, emits structured
+# progress markers for the web UI, and has no interactive prompts.
+#
+# Usage: ./Backups_web.sh /mnt/Tech /mnt/Personal /mnt/Vids
+#        ./Backups_web.sh /mnt/Tech   (backup only Tech)
+
+# --- Validate arguments ---
+if [ $# -eq 0 ]; then
+    echo "ERROR: No source directories specified."
+    echo "Usage: $0 <dir1> [dir2] [dir3] ..."
+    exit 1
+fi
+
+source_dirs=("$@")
 backup_root="/mnt/Backups"
 
 KEEP=3
 MIN_FREE_KB=$((2 * 1024 * 1024))   # 2 GB
 
-# --- Set up multi‑threaded compression ---
-# Prefer pzstd (parallel zstd) if available; otherwise use zstd with threads via environment.
+# --- Set up multi-threaded compression ---
 if command -v pzstd &>/dev/null; then
-    COMPRESS_CMD="pzstd"                      # pzstd defaults to all cores
-    export PZSTD_NUM_THREADS=$(nproc)          # explicitly set if needed
+    COMPRESS_CMD="pzstd"
+    export PZSTD_NUM_THREADS=$(nproc)
 elif command -v zstd &>/dev/null; then
     COMPRESS_CMD="zstd"
-    # Enable multi‑threading via environment variable (works on all zstd versions)
     export ZSTD_NBTHREADS=$(nproc)
 else
     echo "WARNING: zstd not found. Falling back to gzip (slower, worse compression)."
     COMPRESS_CMD="gzip"
-fi
-
-# --- Progress bar support ---
-USE_PV=false
-if command -v pv &>/dev/null; then
-    USE_PV=true
-else
-    echo "pv not found – progress bar disabled."
 fi
 
 # --- Sanity checks on backup root ---
@@ -44,11 +43,7 @@ available_kb=$(df "$backup_root" | awk 'NR==2 {print $4}')
 if [ "$available_kb" -lt "$MIN_FREE_KB" ]; then
     echo "WARNING: Less than $((MIN_FREE_KB/1024)) MB free on $backup_root."
     echo "         Current free: $((available_kb/1024)) MB"
-    echo "Continue anyway? (y/N)"
-    read -r confirm
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+    echo "         Continuing anyway (web mode, no interactive prompt)."
 fi
 
 # --- Create timestamped directory for this run ---
@@ -58,9 +53,16 @@ mkdir -p "$backup_dir"
 echo "[$(date)] Created run directory: $backup_dir"
 
 # --- Backup each source directory ---
+total=${#source_dirs[@]}
+completed=0
+
+echo "PROGRESS:${completed}/${total}"
+
 for dir in "${source_dirs[@]}"; do
     if [ ! -d "$dir" ]; then
         echo "WARNING: Source directory $dir does not exist. Skipping."
+        completed=$((completed + 1))
+        echo "PROGRESS:${completed}/${total}"
         continue
     fi
 
@@ -68,7 +70,7 @@ for dir in "${source_dirs[@]}"; do
     archive_file="$backup_dir/$base_name.tar.zst"
     echo "[$(date)] Archiving $dir -> $archive_file"
 
-    # Common tar options: exclude lost+found, change to parent dir, store relative path
+    # Common tar options
     tar_opts=(
         --exclude='lost+found'
         -C "$(dirname "$dir")"
@@ -76,28 +78,11 @@ for dir in "${source_dirs[@]}"; do
     )
 
     tar_status=0
-    if [ "$USE_PV" = true ]; then
-        # Attempt to get total size for progress bar; if it fails, fall back to direct compression
-        size_bytes=$(du -sb "$dir" 2>/dev/null | cut -f1) || size_bytes=0
-        if [ "$size_bytes" -gt 0 ]; then
-            # We have a valid size – use pv
-            tar cf - "${tar_opts[@]}" | pv -s "$size_bytes" | $COMPRESS_CMD > "$archive_file"
-            tar_status=${PIPESTATUS[0]}
-        else
-            echo "  (Cannot calculate total size for $dir – disabling progress bar for this archive.)"
-            # Fall back to direct tar + compressor
-            tar -I "$COMPRESS_CMD" -cf "$archive_file" "${tar_opts[@]}"
-            tar_status=$?
-        fi
-    else
-        # pv not available at all – direct compression
-        tar -I "$COMPRESS_CMD" -cf "$archive_file" "${tar_opts[@]}"
-        tar_status=$?
-    fi
+    tar -I "$COMPRESS_CMD" -cf "$archive_file" "${tar_opts[@]}" 2>&1
+    tar_status=$?
 
     # Check result and verify archive
     if [ $tar_status -eq 0 ] && [ -f "$archive_file" ]; then
-        # Test integrity using the appropriate command
         if [ "$COMPRESS_CMD" = "gzip" ]; then
             gzip -t "$archive_file" &>/dev/null
         else
@@ -113,6 +98,9 @@ for dir in "${source_dirs[@]}"; do
         echo "ERROR: tar failed for $dir. Removing partial archive if any."
         rm -f "$archive_file"
     fi
+
+    completed=$((completed + 1))
+    echo "PROGRESS:${completed}/${total}"
 done
 
 # --- Retention: keep only the most recent K backup directories ---
@@ -129,3 +117,4 @@ fi
 # --- Final space check ---
 available_kb=$(df "$backup_root" | awk 'NR==2 {print $4}')
 echo "[$(date)] Backup completed. Free space on $backup_root: $((available_kb/1024)) MB"
+echo "BACKUP_COMPLETE"
