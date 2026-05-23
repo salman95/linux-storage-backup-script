@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NAS Backup Manager</title>
+    <title>Homelab Control</title>
     <style>
         :root {
             --bg-primary: #1a1a2e;
@@ -280,6 +280,43 @@
         .log-line.ok { color: var(--success); }
         .log-line.info { color: var(--accent); }
 
+        /* --- Host Status Grid --- */
+        .host-status-item {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem;
+            text-align: center;
+            font-size: 0.85rem;
+        }
+
+        .host-status-name {
+            font-family: 'Courier New', monospace;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .host-status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-bottom: 0.25rem;
+        }
+
+        .host-status-dot.pending { background: var(--text-muted); }
+        .host-status-dot.success { background: var(--success); }
+        .host-status-dot.failed { background: var(--error); }
+        .host-status-dot.skipped { background: var(--warning); }
+
+        .host-status-task {
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
         /* --- Scrollbar styling --- */
         .log-view::-webkit-scrollbar { width: 6px; }
         .log-view::-webkit-scrollbar-track { background: transparent; }
@@ -299,8 +336,8 @@
 <body>
     <div class="container">
         <header>
-            <h1>🗄️ NAS Backup Manager</h1>
-            <p>Select directories and start a compressed backup</p>
+            <h1>🖥️ Homelab Control</h1>
+            <p>Manage backups and system updates</p>
         </header>
 
         <!-- Source Directory Selection -->
@@ -317,6 +354,24 @@
             <div class="btn-row">
                 <button class="btn btn-primary" id="startBtn" onclick="startBackup()">
                     ▶ Start Backup
+                </button>
+            </div>
+        </div>
+
+        <!-- System Updates -->
+        <div class="card">
+            <h2><span class="icon">🔄</span> System Updates</h2>
+            <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1rem;">
+                Update packages on all Proxmox containers and VMs via Ansible.
+                Hosts: archnas.lan, radio.lan, paperless-ngx.lan, intel-ai.lan, torrent.lan
+            </p>
+            <!-- Host Status Grid -->
+            <div id="hostStatusGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.5rem; margin-bottom: 1rem;">
+                <!-- Host status items will be injected here -->
+            </div>
+            <div class="btn-row">
+                <button class="btn btn-primary" id="updateBtn" onclick="startUpdate()">
+                    ⚡ Update All Containers & VMs
                 </button>
             </div>
         </div>
@@ -348,6 +403,7 @@
 
     <script>
         const startBtn = document.getElementById('startBtn');
+        const updateBtn = document.getElementById('updateBtn');
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
         const progressLabel = document.getElementById('progressLabel');
@@ -355,7 +411,26 @@
         const progressFill = document.getElementById('progressFill');
         const logView = document.getElementById('logView');
 
+        const UPDATE_HOSTS = ["archnas.lan", "radio.lan", "paperless-ngx.lan", "intel-ai.lan", "torrent.lan"];
         let eventSource = null;
+        let updateEventSource = null;
+
+        // Create host status grid HTML
+        function createHostStatusGrid() {
+            const grid = document.getElementById('hostStatusGrid');
+            grid.innerHTML = '';
+            UPDATE_HOSTS.forEach(host => {
+                const hostDiv = document.createElement('div');
+                hostDiv.className = 'host-status-item';
+                hostDiv.id = `host-${host.replace(/\./g, '-')}`;
+                hostDiv.innerHTML = `
+                    <div class="host-status-name">${host}</div>
+                    <div class="host-status-dot pending" id="host-dot-${host.replace(/\./g, '-')}"></div>
+                    <div class="host-status-task" id="host-task-${host.replace(/\./g, '-')}">Pending</div>
+                `;
+                grid.appendChild(hostDiv);
+            });
+        }
 
         function toggleCheckbox(item) {
             const cb = item.querySelector('input[type="checkbox"]');
@@ -377,7 +452,7 @@
 
         function updateProgress(completed, total) {
             const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
-            progressLabel.textContent = `${completed} / ${total} directories`;
+            progressLabel.textContent = `${completed} / ${total}`;
             progressPercent.textContent = `${pct}%`;
             progressFill.style.width = `${pct}%`;
         }
@@ -388,6 +463,15 @@
             if (lower.includes('warning')) return 'warning';
             if (lower.startsWith('ok:') || lower.includes('verified')) return 'ok';
             if (lower.includes('archiving') || lower.includes('created run')) return 'info';
+            return '';
+        }
+
+        function classifyUpdateLine(line) {
+            const lower = line.toLowerCase();
+            if (lower.includes('failed') || lower.includes('unreachable') || lower.includes('fatal')) return 'error';
+            if (lower.includes('changed') || lower.includes('ok:')) return 'info';
+            if (lower.includes('warning')) return 'warning';
+            if (lower.includes('success')) return 'ok';
             return '';
         }
 
@@ -402,6 +486,35 @@
             logView.scrollTop = logView.scrollHeight;
         }
 
+        function updateHostStatus(hostStatus) {
+            if (!hostStatus) return;
+            UPDATE_HOSTS.forEach(host => {
+                if (hostStatus[host]) {
+                    const status = hostStatus[host].status || 'pending';
+                    const task = hostStatus[host].task || 'Pending';
+                    const dot = document.getElementById(`host-dot-${host.replace(/\./g, '-')}`);
+                    const taskDiv = document.getElementById(`host-task-${host.replace(/\./g, '-')}`);
+                    if (dot) {
+                        dot.className = `host-status-dot ${status}`;
+                    }
+                    if (taskDiv) {
+                        taskDiv.textContent = status === 'pending' ? 'Pending' : task.substring(0, 60);
+                    }
+                }
+            });
+        }
+
+        // Initialize host status grid on page load
+        createHostStatusGrid();
+
+        function appendUpdateLog(line) {
+            const div = document.createElement('div');
+            div.className = 'log-line ' + classifyUpdateLine(line);
+            div.textContent = line;
+            logView.appendChild(div);
+            logView.scrollTop = logView.scrollHeight;
+        }
+
         async function startBackup() {
             const dirs = getSelectedDirs();
             if (dirs.length === 0) {
@@ -410,7 +523,9 @@
             }
 
             startBtn.disabled = true;
+            updateBtn.disabled = true;
             logView.innerHTML = '';
+            createHostStatusGrid();  // Reset host status grid
             progressFill.className = 'progress-bar-fill';
             updateProgress(0, dirs.length);
             setStatus('running', 'Starting backup...');
@@ -427,6 +542,7 @@
                 if (!resp.ok) {
                     setStatus('error', data.error || 'Failed to start backup');
                     startBtn.disabled = false;
+                    updateBtn.disabled = false;
                     return;
                 }
 
@@ -436,6 +552,7 @@
             } catch (err) {
                 setStatus('error', 'Connection error: ' + err.message);
                 startBtn.disabled = false;
+                updateBtn.disabled = false;
             }
         }
 
@@ -471,6 +588,7 @@
                         progressFill.classList.add('complete');
                     }
                     startBtn.disabled = false;
+                    updateBtn.disabled = false;
                     eventSource.close();
                     eventSource = null;
                 }
@@ -483,6 +601,88 @@
                     eventSource = null;
                 }
                 startBtn.disabled = false;
+                updateBtn.disabled = false;
+            };
+        }
+
+        async function startUpdate() {
+            updateBtn.disabled = true;
+            startBtn.disabled = true;
+            logView.innerHTML = '';
+            createHostStatusGrid();  // Reset host status grid
+            progressFill.className = 'progress-bar-fill';
+            updateProgress(0, 5);
+            setStatus('running', 'Starting system updates...');
+
+            try {
+                const resp = await fetch('/api/update-systems', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    setStatus('error', data.error || 'Failed to start update');
+                    updateBtn.disabled = false;
+                    startBtn.disabled = false;
+                    return;
+                }
+
+                connectUpdateSSE();
+            } catch (err) {
+                setStatus('error', 'Connection error: ' + err.message);
+                updateBtn.disabled = false;
+                startBtn.disabled = false;
+            }
+        }
+
+        function connectUpdateSSE() {
+            if (updateEventSource) {
+                updateEventSource.close();
+            }
+
+            updateEventSource = new EventSource('/api/update-stream');
+
+            updateEventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                updateProgress(data.progress_completed, data.progress_total);
+
+                if (data.new_lines) {
+                    data.new_lines.forEach(line => appendUpdateLog(line));
+                }
+
+                if (data.host_status) {
+                    updateHostStatus(data.host_status);
+                }
+
+                if (data.running) {
+                    setStatus('running', `Updating systems... (${data.progress_completed}/${data.progress_total} hosts updated)`);
+                }
+
+                if (data.finished) {
+                    if (data.error) {
+                        setStatus('error', 'System updates completed with errors');
+                        progressFill.classList.add('error');
+                    } else {
+                        setStatus('success', 'All systems updated successfully!');
+                        progressFill.classList.add('complete');
+                    }
+                    updateBtn.disabled = false;
+                    startBtn.disabled = false;
+                    updateEventSource.close();
+                    updateEventSource = null;
+                }
+            };
+
+            updateEventSource.onerror = () => {
+                if (updateEventSource) {
+                    updateEventSource.close();
+                    updateEventSource = null;
+                }
+                updateBtn.disabled = false;
+                startBtn.disabled = false;
             };
         }
 
@@ -493,8 +693,19 @@
                 const data = await resp.json();
                 if (data.running) {
                     startBtn.disabled = true;
+                    updateBtn.disabled = true;
                     setStatus('running', 'Backup in progress...');
                     connectSSE();
+                }
+
+                // Check update status separately
+                const updateResp = await fetch('/api/update-status');
+                const updateData = await updateResp.json();
+                if (updateData.running) {
+                    updateBtn.disabled = true;
+                    startBtn.disabled = true;
+                    setStatus('running', 'System updates in progress...');
+                    connectUpdateSSE();
                 }
             } catch (e) {
                 // Server might not be ready yet, that's fine
