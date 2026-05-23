@@ -1,0 +1,17 @@
+---
+- name: Update all homelab systems
+  hosts: all
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Update Arch Linux systems (pacman)
+      community.general.pacman:
+        update_cache: true
+        upgrade: true
+      when: ansible_os_family == "Archlinux"
+
+    - name: Update Debian systems (apt)
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+      when: ansible_os_family == "Debian"

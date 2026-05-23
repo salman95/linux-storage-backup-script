@@ -1,5 +1,5 @@
 [Unit]
-Description=NAS Backup Web UI
+Description=Homelab Control Web UI
 After=network.target
 
 [Service]

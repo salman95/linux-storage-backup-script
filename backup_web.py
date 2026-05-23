@@ -8,16 +8,26 @@ import json
 import os
 import subprocess
 import threading
-import time
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response
 
 app = Flask(__name__)
+app.template_folder = str(Path(__file__).resolve().parent / "templates")
 
 # --- Configuration ---
 SCRIPT_DIR = Path(__file__).resolve().parent
 BACKUP_SCRIPT = SCRIPT_DIR / "Backups_web.sh"
 SOURCE_DIRS = ["/mnt/Tech", "/mnt/Personal", "/mnt/Vids"]
+
+# --- Update configuration ---
+ANSIBLE_PLAYBOOK = SCRIPT_DIR / "ansible" / "playbook.yml"
+UPDATE_HOSTS = [
+    "archnas.lan",
+    "radio.lan",
+    "paperless-ngx.lan",
+    "intel-ai.lan",
+    "torrent.lan",
+]
 
 # --- State management ---
 backup_lock = threading.Lock()
@@ -31,6 +41,19 @@ backup_state = {
     "subscribers": [],  # list of threading.Event for SSE clients
 }
 state_lock = threading.Lock()
+
+# --- Update state management ---
+update_lock = threading.Lock()
+update_state = {
+    "running": False,
+    "log": [],
+    "progress_completed": 0,
+    "progress_total": 0,
+    "finished": False,
+    "error": False,
+    "host_status": {},  # {"host.lan": {"status": "success|failed|pending", "task": ""}}
+    "subscribers": [],
+}
 
 
 def notify_subscribers():
@@ -111,6 +134,101 @@ def run_backup(dirs: list[str]):
         backup_lock.release()
 
 
+def run_updates():
+    """Execute Ansible playbook in subprocess and stream output."""
+    try:
+        with state_lock:
+            update_state["running"] = True
+            update_state["log"] = []
+            update_state["progress_completed"] = 0
+            update_state["progress_total"] = len(UPDATE_HOSTS)
+            update_state["finished"] = False
+            update_state["error"] = False
+
+        notify_subscribers()  # notify backup SSE too (harmless)
+
+        # Build ansible-playbook command
+        cmd = [
+            "ansible-playbook",
+            "-i", str(SCRIPT_DIR / "ansible" / "inventory.yml"),
+            str(ANSIBLE_PLAYBOOK),
+        ]
+
+        env = os.environ.copy()
+        env["ANSIBLE_CONFIG"] = str(SCRIPT_DIR / "ansible" / "ansible.cfg")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+
+        # Track per-host status
+        host_status = {host: {"status": "pending", "task": ""} for host in UPDATE_HOSTS}
+        hosts_seen = set()
+        for line in process.stdout:
+            line = line.rstrip("\n")
+
+            # Track per-host progress by parsing ok:/changed:/failed:/unreachable: lines
+            for host in UPDATE_HOSTS:
+                if host in line:
+                    # Check for success first (ok or changed)
+                    if "changed:" in line:
+                        host_status[host]["status"] = "success"
+                        host_status[host]["task"] = line[:50]
+                    elif "ok:" in line and "ok=" not in line:
+                        # Exclude PLAY RECAP ok= lines
+                        host_status[host]["status"] = "success"
+                        host_status[host]["task"] = line[:50]
+                    elif "failed:" in line or "unreachable:" in line:
+                        host_status[host]["status"] = "failed"
+                        host_status[host]["task"] = line[:50]
+                    elif "skipping:" in line:
+                        # Only mark as skipped if not already marked as success
+                        if host_status[host]["status"] == "pending":
+                            host_status[host]["status"] = "skipped"
+                            host_status[host]["task"] = line[:50]
+
+                if host in line and any(
+                    marker in line for marker in ["ok:", "changed:", "skipping:", "unreachable:", "failed:"]
+                ):
+                    hosts_seen.add(host)
+
+            with state_lock:
+                update_state["log"].append(line)
+                update_state["progress_completed"] = len(hosts_seen)
+                update_state["host_status"] = host_status.copy()
+
+            notify_subscribers()
+
+        process.wait()
+
+        with state_lock:
+            if process.returncode != 0:
+                update_state["error"] = True
+                update_state["log"].append(
+                    f"[ERROR] Ansible exited with code {process.returncode}"
+                )
+            update_state["finished"] = True
+            update_state["running"] = False
+
+        notify_subscribers()
+
+    except Exception as e:
+        with state_lock:
+            update_state["error"] = True
+            update_state["log"].append(f"[EXCEPTION] {str(e)}")
+            update_state["finished"] = True
+            update_state["running"] = False
+        notify_subscribers()
+
+    finally:
+        update_lock.release()
+
+
 @app.route("/")
 def index():
     """Serve the main web UI."""
@@ -137,6 +255,84 @@ def start_backup():
     thread.start()
 
     return jsonify({"status": "started", "dirs": valid_dirs})
+
+
+@app.route("/api/update-systems", methods=["POST"])
+def update_systems():
+    """Start system updates via Ansible."""
+    if not update_lock.acquire(blocking=False):
+        return jsonify({"error": "An update is already running."}), 409
+    thread = threading.Thread(target=run_updates, daemon=True)
+    thread.start()
+    return jsonify({"status": "started", "hosts": UPDATE_HOSTS})
+
+
+@app.route("/api/update-status")
+def update_status():
+    """Return the current update state as JSON."""
+    with state_lock:
+        return jsonify({
+            "running": update_state["running"],
+            "finished": update_state["finished"],
+            "error": update_state["error"],
+            "progress_completed": update_state["progress_completed"],
+            "progress_total": update_state["progress_total"],
+            "log_length": len(update_state["log"]),
+            "host_status": update_state["host_status"],
+        })
+
+
+@app.route("/api/update-stream")
+def update_stream():
+    """Server-Sent Events stream for real-time update logs."""
+    def event_stream():
+        my_event = threading.Event()
+        with state_lock:
+            update_state["subscribers"].append(my_event)
+
+        last_sent_log_index = 0
+        try:
+            while True:
+                my_event.wait(timeout=5)
+                my_event.clear()
+
+                with state_lock:
+                    running = update_state["running"]
+                    finished = update_state["finished"]
+                    error = update_state["error"]
+                    completed = update_state["progress_completed"]
+                    total = update_state["progress_total"]
+                    new_lines = update_state["log"][last_sent_log_index:]
+                    host_status = update_state["host_status"].copy()
+                    last_sent_log_index = len(update_state["log"])
+
+                event_data = json.dumps({
+                    "running": running,
+                    "finished": finished,
+                    "error": error,
+                    "progress_completed": completed,
+                    "progress_total": total,
+                    "new_lines": new_lines,
+                    "host_status": host_status,
+                })
+                yield f"data: {event_data}\n\n"
+
+                if finished and not running:
+                    break
+
+        finally:
+            with state_lock:
+                if my_event in update_state["subscribers"]:
+                    update_state["subscribers"].remove(my_event)
+
+    return Response(
+        event_stream(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.route("/api/status")

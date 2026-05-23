@@ -1,1 +1,6 @@
 flask>=3.0
+# System dependencies (install via package manager):
+# - ansible (ansible-core + collections)
+# - sshpass (for password-based SSH auth)
+# After installing ansible, run:
+#   ansible-galaxy collection install community.general

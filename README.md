@@ -1,37 +1,42 @@
-# linux-storage-backup-script
+# Homelab Control
 
-A simple script that will compress and backup all your drives content into one location, now with a **web-based UI** for easy triggering and monitoring.
-
-The idea is to move the contents of one or multiple drives into another designated backup location. The content will be placed in an archive file (`.tar.zst`) with the source directory name, using multi-threaded zstd compression.
-
-You can also run the original script as a cronjob, or use the web UI to trigger backups on demand.
-
-![2023-07-19_16-17](https://github.com/salman95/linux-storage-backup-script/assets/25572063/a8230db6-d4c7-483b-a0e8-aba6a2d1485b)
-
----
+A web-based control panel for homelab management with **NAS backup** and **system updates** capabilities. Features a dark-themed UI with real-time progress tracking via Server-Sent Events (SSE).
 
 ## Features
 
-- **Web Dashboard** — Dark-themed UI accessible on your local network
-- **Directory selection** — Choose which source directories to back up via checkboxes
-- **Real-time progress** — Progress bar tracks per-directory completion
-- **Live log streaming** — Color-coded log output via Server-Sent Events (SSE)
-- **Concurrent backup prevention** — Only one backup can run at a time
-- **Retention policy** — Automatically keeps only the last 3 backup directories
-- **Integrity verification** — Each archive is tested after creation
+### Backup System
+- **Compress & archive** — Multi-threaded zstd compression (`.tar.zst`)
+- **Directory selection** — Choose source directories via checkboxes
+- **Real-time progress** — Live progress bar with per-directory completion
+- **Live log streaming** — Color-coded log output via SSE
+- **Concurrent prevention** — Single backup execution at a time
+- **Retention policy** — Keeps last 3 backup directories
+- **Integrity verification** — Archive validation after creation
+
+### System Updates (via Ansible)
+- **Update all containers & VMs** — One-click Ansible automation
+- **Per-host status grid** — Visual feedback on each host's update status
+- **OS detection** — Automatically selects pacman (Arch) or apt (Debian)
+- **Live progress** — Tracks hosts completed vs total
+- **Concurrent prevention** — Single update operation at a time
 
 ---
 
 ## Project Structure
 
 ```
-├── Backups.sh            # Original CLI backup script
-├── Backups_web.sh        # Web-friendly version (accepts dirs as args, no interactive prompts)
-├── backup_web.py         # Flask web server
+├── Backups.sh                 # Original CLI backup script
+├── Backups_web.sh             # Web-friendly version (accepts dirs as args)
+├── backup_web.py              # Flask web server
 ├── templates/
-│   └── index.html        # Web UI (dark theme, progress bar, log view)
-├── backup-web.service    # Systemd service file
-├── requirements.txt      # Python dependencies
+│   └── index.html             # Web UI (dark theme, progress bars, host status grid)
+├── ansible/
+│   ├── ansible.cfg            # Ansible config (disable host key checking)
+│   ├── inventory.yml          # Host inventory with SSH credentials
+│   └── playbook.yml           # System update playbook (OS-aware)
+├── backup-web.service         # Systemd service file
+├── requirements.txt           # Python dependencies
+├── install.sh                 # Automated installation script
 └── README.md
 ```
 
@@ -39,104 +44,212 @@ You can also run the original script as a cronjob, or use the web UI to trigger 
 
 ## Prerequisites
 
-On the NAS server (Arch Linux), install the following:
-
+### For Arch Linux
 ```bash
-# Python 3 and pip
-sudo pacman -S python python-pip
+sudo pacman -S python python-pip zstd ansible sshpass pv
+```
 
-# zstd for compression (pzstd preferred for parallel compression)
-sudo pacman -S zstd
+### For Debian/Ubuntu
+```bash
+sudo apt-get install python3 python3-pip zstd ansible sshpass pv
+```
 
-# Flask
-pip install -r requirements.txt
+Then install Python dependencies:
+```bash
+pip3 install -r requirements.txt
+```
+
+### Ansible Collections
+```bash
+ansible-galaxy collection install community.general
 ```
 
 ---
 
-## Deployment on NAS Server
+## Automated Installation
 
-### 1. Clone the repository
-
+Run the installation script (requires root):
 ```bash
-cd /home/salman95
+sudo ./install.sh
+```
+
+This will:
+1. Install all system dependencies (Python, zstd, ansible, sshpass, pv)
+2. Install Python dependencies (Flask)
+3. Install `community.general` Ansible collection
+4. Validate Ansible configuration files
+5. Create and enable systemd service
+6. Start the web server
+
+---
+
+## Deployment
+
+### Manual Installation
+```bash
+cd /home/youruser
 git clone https://github.com/salman95/linux-storage-backup-script.git
 cd linux-storage-backup-script
-```
 
-### 2. Install Python dependencies
+# Install dependencies
+pip3 install -r requirements.txt
+ansible-galaxy collection install community.general
 
-```bash
-pip install -r requirements.txt
-```
+# Configure inventory with your hosts (see Configuration section)
+# Edit ansible/inventory.yml
 
-### 3. Make the backup script executable
-
-```bash
-chmod +x Backups_web.sh
-```
-
-### 4. Test manually
-
-```bash
+# Start the web server
 python3 backup_web.py
 ```
 
-Then open `http://192.168.2.6:5000` in your browser.
-
-### 5. Set up as a systemd service (auto-start on boot)
-
+### Systemd Service (auto-start on boot)
 ```bash
-# Copy the service file
+# The install.sh script handles this automatically
+# Or manually:
 sudo cp backup-web.service /etc/systemd/system/
-
-# Reload systemd, enable, and start
 sudo systemctl daemon-reload
 sudo systemctl enable backup-web.service
 sudo systemctl start backup-web.service
-
-# Check status
-sudo systemctl status backup-web.service
-```
-
-### 6. Access the Web UI
-
-Open in any browser on your network:
-
-```
-http://192.168.2.6:5000
 ```
 
 ---
 
 ## Configuration
 
-Edit these values in the respective files:
+### Ansible Inventory (SSH Credentials)
+Edit `ansible/inventory.yml` with your hosts:
 
-| Setting | File | Default |
-|---|---|---|
-| Source directories | `backup_web.py` → `SOURCE_DIRS` | `/mnt/Tech`, `/mnt/Personal`, `/mnt/Vids` |
-| Backup destination | `Backups_web.sh` → `backup_root` | `/mnt/Backups` |
-| Retention count | `Backups_web.sh` → `KEEP` | `3` |
-| Min free space | `Backups_web.sh` → `MIN_FREE_KB` | `2 GB` |
-| Web server port | `backup_web.py` → `app.run(port=)` | `5000` |
+```yaml
+all:
+  hosts:
+    archnas.lan:
+      ansible_port: 2222
+      ansible_user: salman95
+      ansible_ssh_pass: your_password
+      ansible_become_pass: your_password
+    radio.lan:
+      ansible_user: root
+      ansible_ssh_pass: your_password
+    # ... add more hosts
+```
+
+**Security Note:** Passwords are stored in plaintext. For production, use:
+```bash
+ansible-vault encrypt ansible/inventory.yml
+```
+
+### Web Server
+Edit `backup_web.py`:
+
+| Setting | Default |
+|---|---|
+| `SOURCE_DIRS` | `["/mnt/Tech", "/mnt/Personal", "/mnt/Vids"]` |
+| `app.run(port=)` | `5000` |
+
+### Backup Script
+Edit `Backups_web.sh`:
+
+| Setting | Default |
+|---|---|
+| `backup_root` | `/mnt/Backups` |
+| `KEEP` | `3` (retention count) |
+| `MIN_FREE_KB` | `2 GB` |
 
 ---
 
-## CLI Usage (Original Script)
+## Usage
 
-The original `Backups.sh` script still works standalone:
+### Access the Web UI
+Open in any browser on your network:
+```
+http://your-server-ip:5000
+```
+
+### Trigger Backup
+1. Select source directories via checkboxes
+2. Click **▶ Start Backup**
+
+### Trigger System Updates
+1. Click **⚡ Update All Containers & VMs**
+2. Monitor progress via the status grid and log output
+
+### Check Service Status
+```bash
+systemctl status backup-web.service
+journalctl -u backup-web.service -f
+```
+
+---
+
+## CLI Usage (Original Backup Script)
 
 ```bash
 ./Backups.sh
 ```
 
-Edit `crontab` for scheduled backups: `sudo crontab -e`
+Edit `crontab` for scheduled backups:
+```bash
+sudo crontab -e
+```
 
 ---
 
-## Notes
+## Password Locations
 
-- **No authentication** — This is designed for LAN-only access. Use a VPN (e.g., WireGuard) for remote access.
-- **No root required** — Runs as `salman95` as long as the user has read access to source dirs and write access to the backup destination.
-- The systemd service assumes the repo is cloned to `/home/salman95/linux-storage-backup-script`. Adjust the paths in `backup-web.service` if you clone it elsewhere.
+All SSH passwords are stored in **one location**:
+- **`ansible/inventory.yml`** — Plaintext SSH credentials for all hosts
+
+**No passwords are stored elsewhere.** This file contains:
+- `ansible_ssh_pass` — SSH connection password
+- `ansible_become_pass` — Sudo/privilege escalation password (for non-root users)
+
+---
+
+## Security Notes
+
+- **No authentication** — Designed for LAN-only access. Use a VPN (e.g., WireGuard) for remote access.
+- **Password-based SSH** — Requires `sshpass`. Consider using Ansible Vault for production.
+- **No root required** — Runs as a non-root user (configure in `backup-web.service`).
+
+---
+
+## Troubleshooting
+
+### Ansible Connection Errors
+```bash
+# Test SSH connectivity manually
+sshpass -p 'your_password' ssh user@hostname
+
+# Test Ansible playbook (dry run)
+ansible-playbook -i ansible/inventory.yml ansible/playbook.yml --check
+```
+
+### Web UI Not Starting
+```bash
+# Check service status
+systemctl status backup-web.service
+journalctl -u backup-web.service -f
+
+# Run manually to see errors
+python3 backup_web.py
+```
+
+### Python Dependencies
+```bash
+# Check Flask is installed
+pip3 show flask
+
+# Reinstall if needed
+pip3 install --break-system-packages -r requirements.txt
+```
+
+### Host Key Verification
+If you see SSH host key errors:
+- The `ansible.cfg` disables host key checking by default
+- Or manually accept host keys first: `ssh user@hostname`
+
+---
+
+## License
+
+Same as original: MIT
