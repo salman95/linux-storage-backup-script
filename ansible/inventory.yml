@@ -1,0 +1,20 @@
+all:
+  hosts:
+    archnas.lan:
+      ansible_port: 2222
+      ansible_user: salman95
+      ansible_ssh_pass: oreoman111
+      ansible_become_pass: oreoman111
+    radio.lan:
+      ansible_user: root
+      ansible_ssh_pass: oreoman111
+    paperless-ngx.lan:
+      ansible_user: root
+      ansible_ssh_pass: oreoman111
+    intel-ai.lan:
+      ansible_user: root
+      ansible_ssh_pass: oreoman111
+    torrent.lan:
+      ansible_user: salman95
+      ansible_ssh_pass: oreoman111
+      ansible_become_pass: oreoman111
