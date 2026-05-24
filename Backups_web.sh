@@ -1,5 +1,5 @@
 #!/bin/bash
-set -uo pipefail
+set -euo pipefail
 
 # --- Web-friendly backup script ---
 # This version accepts source directories as arguments, emits structured
@@ -117,4 +117,3 @@ fi
 # --- Final space check ---
 available_kb=$(df "$backup_root" | awk 'NR==2 {print $4}')
 echo "[$(date)] Backup completed. Free space on $backup_root: $((available_kb/1024)) MB"
-echo "BACKUP_COMPLETE"

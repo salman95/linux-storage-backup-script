@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=salman95
-WorkingDirectory=/home/salman95/linux-storage-backup-script
-ExecStart=/usr/bin/python3 /home/salman95/linux-storage-backup-script/backup_web.py
+User={{USER}}
+WorkingDirectory={{WORKING_DIR}}
+ExecStart=/usr/bin/python3 {{WORKING_DIR}}/backup_web.py
 Restart=on-failure
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

@@ -12,14 +12,14 @@ backup_root="/mnt/Backups"
 KEEP=3
 MIN_FREE_KB=$((2 * 1024 * 1024))   # 2 GB
 
-# --- Set up multi‑threaded compression ---
+# --- Set up multi-threaded compression ---
 # Prefer pzstd (parallel zstd) if available; otherwise use zstd with threads via environment.
 if command -v pzstd &>/dev/null; then
     COMPRESS_CMD="pzstd"                      # pzstd defaults to all cores
     export PZSTD_NUM_THREADS=$(nproc)          # explicitly set if needed
 elif command -v zstd &>/dev/null; then
     COMPRESS_CMD="zstd"
-    # Enable multi‑threading via environment variable (works on all zstd versions)
+    # Enable multi-threading via environment variable (works on all zstd versions)
     export ZSTD_NBTHREADS=$(nproc)
 else
     echo "WARNING: zstd not found. Falling back to gzip (slower, worse compression)."
@@ -31,7 +31,7 @@ USE_PV=false
 if command -v pv &>/dev/null; then
     USE_PV=true
 else
-    echo "pv not found – progress bar disabled."
+    echo "pv not found - progress bar disabled."
 fi
 
 # --- Sanity checks on backup root ---
@@ -80,17 +80,17 @@ for dir in "${source_dirs[@]}"; do
         # Attempt to get total size for progress bar; if it fails, fall back to direct compression
         size_bytes=$(du -sb "$dir" 2>/dev/null | cut -f1) || size_bytes=0
         if [ "$size_bytes" -gt 0 ]; then
-            # We have a valid size – use pv
+            # We have a valid size - use pv
             tar cf - "${tar_opts[@]}" | pv -s "$size_bytes" | $COMPRESS_CMD > "$archive_file"
             tar_status=${PIPESTATUS[0]}
         else
-            echo "  (Cannot calculate total size for $dir – disabling progress bar for this archive.)"
+            echo "  (Cannot calculate total size for $dir - disabling progress bar for this archive.)"
             # Fall back to direct tar + compressor
             tar -I "$COMPRESS_CMD" -cf "$archive_file" "${tar_opts[@]}"
             tar_status=$?
         fi
     else
-        # pv not available at all – direct compression
+        # pv not available at all - direct compression
         tar -I "$COMPRESS_CMD" -cf "$archive_file" "${tar_opts[@]}"
         tar_status=$?
     fi

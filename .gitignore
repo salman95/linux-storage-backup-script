@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+ansible/inventory.yml
+backup-web.service
+progress.md
