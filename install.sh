@@ -126,7 +126,7 @@ ANSIBLE_DIR="ansible"
 if [[ -d "$ANSIBLE_DIR" ]]; then
     echo "Ansible directory exists: $ANSIBLE_DIR"
 
-    # Verify inventory.yml
+    # Verify/create inventory.yml
     if [[ -f "$ANSIBLE_DIR/inventory.yml" ]]; then
         echo "  - inventory.yml: OK"
         # Verify YAML syntax
@@ -138,7 +138,24 @@ if [[ -d "$ANSIBLE_DIR" ]]; then
     else
         echo "  - inventory.yml: MISSING"
         if [[ -f "$ANSIBLE_DIR/inventory.yml.example" ]]; then
-            echo "    Copy ansible/inventory.yml.example -> ansible/inventory.yml and fill in credentials"
+            echo "  Creating from template..."
+            cp "$ANSIBLE_DIR/inventory.yml.example" "$ANSIBLE_DIR/inventory.yml"
+            echo "  Created: $ANSIBLE_DIR/inventory.yml"
+            echo
+            echo "  ============================================"
+            echo "  ACTION REQUIRED: Edit $ANSIBLE_DIR/inventory.yml"
+            echo "  Replace YOUR_PASSWORD and YOUR_USER with real credentials."
+            echo "  ============================================"
+            echo
+            # Ask if user wants to edit now
+            read -r -p "  Open inventory.yml in your default editor now? [Y/n] " answer
+            case "$answer" in
+                n|N|no|No) echo "  Skipping. Edit it manually before running updates." ;;
+                *)
+                    EDITOR="${EDITOR:-nano}" $ANSIBLE_DIR/inventory.yml
+                    echo "  Done editing. Remember: this file is in .gitignore (won't be committed)."
+                    ;;
+            esac
         fi
     fi
 
@@ -238,12 +255,11 @@ echo
 echo "Web interface: http://$(hostname -I | awk '{print $1}'):5000"
 echo
 echo "Quick Start:"
-echo "  1. Edit ansible/inventory.yml with your SSH credentials"
+echo "  1. ansible/inventory.yml is created — fill in your real credentials"
 echo "  2. Ensure password-based SSH works for all hosts:"
 echo "     sshpass -p 'your_password' ssh root@hostname"
-echo "  3. Install community.general if not done: ansible-galaxy collection install community.general"
-echo "  4. Restart service: sudo systemctl restart backup-web.service"
-echo "  5. Access: http://$(hostname -I | awk '{print $1}'):5000"
+echo "  3. Restart service: sudo systemctl restart backup-web.service"
+echo "  4. Access: http://$(hostname -I | awk '{print $1}'):5000"
 echo
 echo "Troubleshooting:"
 echo "  - Check logs: journalctl -u backup-web.service -f"
