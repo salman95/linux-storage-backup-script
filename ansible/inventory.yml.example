@@ -1,0 +1,24 @@
+# Copy this file to inventory.yml and fill in real credentials.
+# NEVER commit inventory.yml with real passwords — it's in .gitignore.
+# For production, use ansible-vault to encrypt credentials.
+
+all:
+  hosts:
+    archnas.lan:
+      ansible_port: 2222
+      ansible_user: YOUR_USER
+      ansible_ssh_pass: YOUR_PASSWORD
+      ansible_become_pass: YOUR_PASSWORD
+    radio.lan:
+      ansible_user: root
+      ansible_ssh_pass: YOUR_PASSWORD
+    paperless-ngx.lan:
+      ansible_user: root
+      ansible_ssh_pass: YOUR_PASSWORD
+    intel-ai.lan:
+      ansible_user: root
+      ansible_ssh_pass: YOUR_PASSWORD
+    torrent.lan:
+      ansible_user: YOUR_USER
+      ansible_ssh_pass: YOUR_PASSWORD
+      ansible_become_pass: YOUR_PASSWORD

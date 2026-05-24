@@ -345,7 +345,7 @@
             <h2><span class="icon">📁</span> Source Directories</h2>
             <div class="dir-list" id="dirList">
                 {% for dir in source_dirs %}
-                <div class="dir-item" onclick="toggleCheckbox(this)">
+                <div class="dir-item" onclick="toggleCheckbox(this, event)">
                     <input type="checkbox" id="dir-{{ loop.index }}" value="{{ dir }}" checked>
                     <label for="dir-{{ loop.index }}">{{ dir }}</label>
                 </div>
@@ -432,10 +432,9 @@
             });
         }
 
-        function toggleCheckbox(item) {
+        function toggleCheckbox(item, evt) {
             const cb = item.querySelector('input[type="checkbox"]');
-            // Only toggle if the click wasn't directly on the checkbox
-            if (event.target !== cb) {
+            if (evt.target !== cb) {
                 cb.checked = !cb.checked;
             }
         }

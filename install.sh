@@ -31,13 +31,6 @@ fi
 echo "Detected package manager: ${PKG_INSTALL%% *}"
 echo
 
-# --- Check if running as root or with sudo ---
-if [[ $EUID -ne 0 ]] && ! sudo -n true 2>/dev/null; then
-    echo "ERROR: This script requires root privileges (sudo)."
-    echo "Please run: sudo ./install.sh"
-    exit 1
-fi
-
 # --- System Dependency Installation ---
 echo "[1/6] Installing system dependencies..."
 echo "  - Python 3 and pip"
@@ -132,8 +125,8 @@ ansible-galaxy collection install community.general --force || {
 ANSIBLE_DIR="ansible"
 if [[ -d "$ANSIBLE_DIR" ]]; then
     echo "Ansible directory exists: $ANSIBLE_DIR"
-    
-    # Verify inventory.yml
+
+    # Verify/create inventory.yml
     if [[ -f "$ANSIBLE_DIR/inventory.yml" ]]; then
         echo "  - inventory.yml: OK"
         # Verify YAML syntax
@@ -143,16 +136,36 @@ if [[ -d "$ANSIBLE_DIR" ]]; then
             echo "  - inventory.yml syntax: INVALID - Fix YAML errors before running"
         fi
     else
-        echo "  - inventory.yml: MISSING - Create ansible/inventory.yml with your SSH credentials"
+        echo "  - inventory.yml: MISSING"
+        if [[ -f "$ANSIBLE_DIR/inventory.yml.example" ]]; then
+            echo "  Creating from template..."
+            cp "$ANSIBLE_DIR/inventory.yml.example" "$ANSIBLE_DIR/inventory.yml"
+            echo "  Created: $ANSIBLE_DIR/inventory.yml"
+            echo
+            echo "  ============================================"
+            echo "  ACTION REQUIRED: Edit $ANSIBLE_DIR/inventory.yml"
+            echo "  Replace YOUR_PASSWORD and YOUR_USER with real credentials."
+            echo "  ============================================"
+            echo
+            # Ask if user wants to edit now
+            read -r -p "  Open inventory.yml in your default editor now? [Y/n] " answer
+            case "$answer" in
+                n|N|no|No) echo "  Skipping. Edit it manually before running updates." ;;
+                *)
+                    EDITOR="${EDITOR:-nano}" $ANSIBLE_DIR/inventory.yml
+                    echo "  Done editing. Remember: this file is in .gitignore (won't be committed)."
+                    ;;
+            esac
+        fi
     fi
-    
+
     # Verify playbook.yml
     if [[ -f "$ANSIBLE_DIR/playbook.yml" ]]; then
         echo "  - playbook.yml: OK"
     else
         echo "  - playbook.yml: MISSING"
     fi
-    
+
     # Verify ansible.cfg
     if [[ -f "$ANSIBLE_DIR/ansible.cfg" ]]; then
         echo "  - ansible.cfg: OK"
@@ -187,40 +200,26 @@ fi
 
 if [[ "$SKIP_SERVICE" == "false" ]]; then
     SERVICE_USER="${SUDO_USER:-$USER}"
-    
-    # Create systemd service file with correct paths
-    cat > "$SERVICE_PATH" << EOF
-[Unit]
-Description=Homelab Control Web UI
-After=network.target
 
-[Service]
-Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$SCRIPT_DIR
-ExecStart=/usr/bin/python3 $SCRIPT_DIR/backup_web.py
-Restart=on-failure
-RestartSec=5
-Environment=PYTHONUNBUFFERED=1
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    # Generate systemd service from template with correct user and paths
+    sed -e "s|{{USER}}|$SERVICE_USER|g" \
+        -e "s|{{WORKING_DIR}}|$SCRIPT_DIR|g" \
+        "$SCRIPT_DIR/backup-web.service.template" > "$SERVICE_PATH"
 
     echo "  - Created systemd service file: $SERVICE_PATH"
-    
+
     # Reload systemd
     systemctl daemon-reload
     echo "  - Reloaded systemd daemon"
-    
+
     # Enable service
     systemctl enable backup-web.service
     echo "  - Enabled backup-web.service"
-    
+
     # Start service
     systemctl start backup-web.service
     echo "  - Started backup-web.service"
-    
+
     echo
     echo "[5/6] Verifying service status..."
     systemctl status backup-web.service --no-pager || true
@@ -256,12 +255,11 @@ echo
 echo "Web interface: http://$(hostname -I | awk '{print $1}'):5000"
 echo
 echo "Quick Start:"
-echo "  1. Edit ansible/inventory.yml with your SSH credentials"
+echo "  1. ansible/inventory.yml is created — fill in your real credentials"
 echo "  2. Ensure password-based SSH works for all hosts:"
 echo "     sshpass -p 'your_password' ssh root@hostname"
-echo "  3. Install community.general if not done: ansible-galaxy collection install community.general"
-echo "  4. Restart service: sudo systemctl restart backup-web.service"
-echo "  5. Access: http://$(hostname -I | awk '{print $1}'):5000"
+echo "  3. Restart service: sudo systemctl restart backup-web.service"
+echo "  4. Access: http://$(hostname -I | awk '{print $1}'):5000"
 echo
 echo "Troubleshooting:"
 echo "  - Check logs: journalctl -u backup-web.service -f"

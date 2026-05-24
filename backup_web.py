@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NAS Backup Web UI — Flask server
+NAS Backup Web UI - Flask server
 Provides a simple web interface to trigger and monitor backups via SSE.
 """
 
@@ -18,6 +18,7 @@ app.template_folder = str(Path(__file__).resolve().parent / "templates")
 SCRIPT_DIR = Path(__file__).resolve().parent
 BACKUP_SCRIPT = SCRIPT_DIR / "Backups_web.sh"
 SOURCE_DIRS = ["/mnt/Tech", "/mnt/Personal", "/mnt/Vids"]
+MAX_LOG_LINES = 2000  # cap in-memory log to prevent unbounded growth
 
 # --- Update configuration ---
 ANSIBLE_PLAYBOOK = SCRIPT_DIR / "ansible" / "playbook.yml"
@@ -56,11 +57,24 @@ update_state = {
 }
 
 
-def notify_subscribers():
-    """Wake up all SSE subscriber threads."""
+def notify_backup_subscribers():
+    """Wake up all backup SSE subscriber threads."""
     with state_lock:
         for event in backup_state["subscribers"]:
             event.set()
+
+
+def notify_update_subscribers():
+    """Wake up all update SSE subscriber threads."""
+    with state_lock:
+        for event in update_state["subscribers"]:
+            event.set()
+
+
+def notify_subscribers():
+    """Wake up all SSE subscriber threads (both backup and update)."""
+    notify_backup_subscribers()
+    notify_update_subscribers()
 
 
 def run_backup(dirs: list[str]):
@@ -107,6 +121,7 @@ def run_backup(dirs: list[str]):
 
             with state_lock:
                 backup_state["log"].append(line)
+                backup_state["log"] = backup_state["log"][-MAX_LOG_LINES:]
             notify_subscribers()
 
         process.wait()
@@ -117,6 +132,7 @@ def run_backup(dirs: list[str]):
                 backup_state["log"].append(
                     f"[ERROR] Script exited with code {process.returncode}"
                 )
+                backup_state["log"] = backup_state["log"][-MAX_LOG_LINES:]
             backup_state["finished"] = True
             backup_state["running"] = False
 
@@ -145,7 +161,7 @@ def run_updates():
             update_state["finished"] = False
             update_state["error"] = False
 
-        notify_subscribers()  # notify backup SSE too (harmless)
+        notify_update_subscribers()
 
         # Build ansible-playbook command
         cmd = [
@@ -174,17 +190,17 @@ def run_updates():
 
             # Track per-host progress by parsing ok:/changed:/failed:/unreachable: lines
             for host in UPDATE_HOSTS:
-                if host in line:
-                    # Check for success first (ok or changed)
-                    if "changed:" in line:
+                # Use word-boundary match to avoid false positives (e.g., "radio.lan" inside another path)
+                if " " + host in line or line.startswith(host + " "):
+                    if "failed:" in line or "unreachable:" in line:
+                        host_status[host]["status"] = "failed"
+                        host_status[host]["task"] = line[:50]
+                    elif "changed:" in line:
                         host_status[host]["status"] = "success"
                         host_status[host]["task"] = line[:50]
                     elif "ok:" in line and "ok=" not in line:
                         # Exclude PLAY RECAP ok= lines
                         host_status[host]["status"] = "success"
-                        host_status[host]["task"] = line[:50]
-                    elif "failed:" in line or "unreachable:" in line:
-                        host_status[host]["status"] = "failed"
                         host_status[host]["task"] = line[:50]
                     elif "skipping:" in line:
                         # Only mark as skipped if not already marked as success
@@ -192,17 +208,18 @@ def run_updates():
                             host_status[host]["status"] = "skipped"
                             host_status[host]["task"] = line[:50]
 
-                if host in line and any(
-                    marker in line for marker in ["ok:", "changed:", "skipping:", "unreachable:", "failed:"]
-                ):
-                    hosts_seen.add(host)
+                    if any(
+                        marker in line for marker in ["ok:", "changed:", "skipping:", "unreachable:", "failed:"]
+                    ):
+                        hosts_seen.add(host)
 
             with state_lock:
                 update_state["log"].append(line)
+                update_state["log"] = update_state["log"][-MAX_LOG_LINES:]
                 update_state["progress_completed"] = len(hosts_seen)
                 update_state["host_status"] = host_status.copy()
 
-            notify_subscribers()
+            notify_update_subscribers()
 
         process.wait()
 
@@ -212,10 +229,11 @@ def run_updates():
                 update_state["log"].append(
                     f"[ERROR] Ansible exited with code {process.returncode}"
                 )
+                update_state["log"] = update_state["log"][-MAX_LOG_LINES:]
             update_state["finished"] = True
             update_state["running"] = False
 
-        notify_subscribers()
+        notify_update_subscribers()
 
     except Exception as e:
         with state_lock:
@@ -223,7 +241,7 @@ def run_updates():
             update_state["log"].append(f"[EXCEPTION] {str(e)}")
             update_state["finished"] = True
             update_state["running"] = False
-        notify_subscribers()
+        notify_update_subscribers()
 
     finally:
         update_lock.release()
